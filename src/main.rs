@@ -11,12 +11,7 @@ use crossterm::{
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal,
 };
-use sysinfo::{ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt};
-
-// Check directory
-// Ask for command || defualt
-// Ask for entry || defualt
-// should watch all files excluding target by default
+use sysinfo::{ProcessExt, System, SystemExt};
 
 #[derive(PartialEq, PartialOrd, Debug, Clone)]
 struct Files {
@@ -112,87 +107,74 @@ fn dir_runner(dir_event: std::sync::mpsc::Sender<WatcherEvent>, dir_path: String
     }
 }
 
-fn cmd_runner(dir_event: std::sync::mpsc::Sender<WatcherEvent>, dir_cmd: String, dir_path: String) {
+fn cmd_runner(
+    dir_event: std::sync::mpsc::Sender<WatcherEvent>,
+    _dir_cmd: String,
+    dir_path: String,
+) -> Result<(), std::io::Error> {
     if cfg!(target_os = "windows") {
-        let dir_event_copy = dir_event.clone();
-        std::thread::spawn(move || {
-            loop {
-                let process = std::process::Command::new("cargo")
-                    .args(["run"])
-                    .stdout(Stdio::piped())
-                    .stdin(Stdio::piped())
-                    .output();
+        loop {
+            // Generate Cargo Run process
+            let child_process = std::process::Command::new("cargo")
+                .args(["run"])
+                .stdout(Stdio::null())
+                .stdin(Stdio::null())
+                .spawn()?;
 
-                match process {
-                    Ok(output) => {
-                        if let Some(status_code) = output.status.code() {
-                            if status_code == 0 {
-                                // Application was closed
-                                dir_event_copy.send(WatcherEvent::Exit).unwrap();
-                                break;
-                            } else {
-                                // Application was terminated
-                                dir_event_copy.send(WatcherEvent::Starting).unwrap();
-                            }
-                        }
+            // scan and find executable
+            let mut exe_name = String::new();
+            for entry in std::fs::read_dir(dir_path.clone() + "/target/debug")
+                .expect("Couldn't search directory for executables")
+            {
+                if let Some(found_file) = entry.unwrap().file_name().to_str() {
+                    if found_file.contains(".exe") {
+                        exe_name = found_file.to_string();
                     }
-                    Err(e) => dir_event_copy
-                        .send(WatcherEvent::Error(e.to_string()))
-                        .unwrap(),
                 }
             }
-        });
 
-        let mut exe_name = String::new();
-        for entry in std::fs::read_dir(dir_path + "/target/debug").unwrap() {
-            if let Some(found_file) = entry.unwrap().file_name().to_str() {
-                if found_file.contains(".exe") {
-                    exe_name = found_file.to_string();
-                }
-            }
-        }
-
-        let mut sys = System::new_with_specifics(
-            RefreshKind::default().with_processes(ProcessRefreshKind::everything()),
-        );
-
-        let process_name = loop {
-            // Refresh Process list
-            sys.refresh_processes();
-
-            let mut process_name = String::new();
-            for key in sys.processes() {
-                if let Some(file_name) = key.1.exe().file_name() {
-                    if file_name
-                        .to_os_string()
-                        .into_string()
-                        .unwrap()
-                        .contains(&exe_name)
-                    {
-                        process_name = key.1.name().to_string();
+            let mut sys = sysinfo::System::new();
+            let mut exec_running = false;
+            loop {
+                for (pid, process) in sys.processes() {
+                    if exe_name == process.name().to_owned() {
+                        let pid = pid.to_owned();
+                        dir_event.send(WatcherEvent::Watching(pid)).unwrap();
+                        exec_running = true;
                         break;
                     }
                 }
+
+                if exec_running {
+                    break;
+                }
+
+                sys.refresh_processes();
             }
 
-            if !process_name.is_empty() {
-                break process_name;
-            };
-            std::thread::sleep(Duration::from_millis(2000));
-        };
-
-        dir_event
-            .send(WatcherEvent::Watching(process_name))
-            .unwrap();
+            match child_process.wait_with_output() {
+                Ok(output) => {
+                    if let Some(status_code) = output.status.code() {
+                        if status_code == 0 {
+                            // Application was closed
+                            dir_event.send(WatcherEvent::Exit).unwrap();
+                        } else {
+                            // Application was terminated
+                            dir_event.send(WatcherEvent::Starting).unwrap();
+                        }
+                    }
+                }
+                Err(e) => dir_event.send(WatcherEvent::Error(e.to_string())).unwrap(),
+            }
+        }
     }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]
 enum WatcherEvent {
     Starting,
-    InvalidDirectory,
-    Investigating,
-    Watching(String),
+    Watching(sysinfo::Pid),
     FileChanged(Vec<Files>),
     Stopping,
     Stopped,
@@ -204,8 +186,6 @@ impl std::fmt::Display for WatcherEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             WatcherEvent::Starting => write!(f, "STARTING"),
-            WatcherEvent::InvalidDirectory => write!(f, "INVALID_DIR"),
-            WatcherEvent::Investigating => write!(f, "INVESTIGATING"),
             WatcherEvent::Watching(_) => write!(f, "WATCHING"),
             WatcherEvent::FileChanged(_) => write!(f, "FILE_CHANGED"),
             WatcherEvent::Stopping => write!(f, "STOPPING"),
@@ -240,8 +220,7 @@ impl Default for WatchDog {
         let watch_dog_status = Arc::new(Mutex::new(WatcherEvent::Stopped));
         let watch_dog_status_clone = Arc::clone(&watch_dog_status);
 
-        let app_process_name = Arc::new(Mutex::new(String::new()));
-        let app_process_name_clone = Arc::clone(&app_process_name);
+        let cargo_exe_pid = Arc::new(Mutex::new(sysinfo::Pid::from(usize::default())));
 
         std::thread::spawn(move || loop {
             // Sleep loop to loosen CPU stress
@@ -256,15 +235,14 @@ impl Default for WatchDog {
                             terminal::Clear(terminal::ClearType::All),
                             cursor::MoveTo(0, 0),
                             SetForegroundColor(Color::Cyan),
-                            Print("Waiting for initialisation!")
+                            Print("Waiting for initialisation!"),
+                            cursor::MoveToNextLine(1),
                         )
                         .unwrap();
                     }
-                    WatcherEvent::InvalidDirectory => todo!(),
-                    WatcherEvent::Investigating => todo!(),
-                    WatcherEvent::Watching(process_name) => {
-                        let mut pname = app_process_name_clone.lock().unwrap();
-                        *pname = process_name.clone();
+                    WatcherEvent::Watching(process_id) => {
+                        let mut pname = cargo_exe_pid.lock().unwrap();
+                        *pname = process_id.clone();
 
                         queue!(
                             stdout,
@@ -272,7 +250,6 @@ impl Default for WatchDog {
                             cursor::MoveTo(0, 0),
                             SetForegroundColor(Color::Cyan),
                             Print("Watching directory for changes:"),
-                            Print(process_name),
                             cursor::MoveToNextLine(1),
                             SetForegroundColor(Color::DarkYellow),
                             cursor::MoveRight(2),
@@ -312,23 +289,15 @@ impl Default for WatchDog {
                             SetForegroundColor(Color::Cyan),
                             terminal::Clear(terminal::ClearType::CurrentLine),
                             Print("Reloading application..."),
+                            cursor::MoveToNextLine(1),
                         )
                         .unwrap();
 
-                        let process_name = app_process_name_clone.lock().unwrap();
-                        let sys = System::new_with_specifics(
-                            RefreshKind::default().with_processes(ProcessRefreshKind::everything()),
-                        );
-
-                        queue!(
-                            stdout,
-                            terminal::Clear(terminal::ClearType::CurrentLine),
-                            Print(&process_name)
-                        )
-                        .unwrap();
-
-                        // Find all processes with selected name and kill them
-                        for process in sys.processes_by_exact_name(&process_name) {
+                        // Find and kill the process
+                        let process_id = cargo_exe_pid.lock().unwrap();
+                        let mut sys = System::new();
+                        sys.refresh_processes();
+                        if let Some(process) = sys.process(sysinfo::Pid::from(*process_id)) {
                             process.kill();
                         }
 
