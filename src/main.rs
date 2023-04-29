@@ -1,5 +1,5 @@
 use std::{
-    io::{stdout, Cursor, Write},
+    io::{stdout, Write},
     process::Stdio,
     sync::{mpsc::Sender, Arc, Mutex},
     time::{Duration, SystemTime},
@@ -7,12 +7,11 @@ use std::{
 
 // use colored::{Color, Colorize};
 use crossterm::{
-    cursor, execute, queue,
-    style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
-    terminal::{self, Clear},
-    Command, ExecutableCommand,
+    cursor, queue,
+    style::{Color, Print, ResetColor, SetForegroundColor},
+    terminal,
 };
-use sysinfo::{Pid, ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt};
+use sysinfo::{ProcessExt, ProcessRefreshKind, RefreshKind, System, SystemExt};
 
 // Check directory
 // Ask for command || defualt
@@ -117,17 +116,30 @@ fn cmd_runner(dir_event: std::sync::mpsc::Sender<WatcherEvent>, dir_cmd: String,
     if cfg!(target_os = "windows") {
         let dir_event_copy = dir_event.clone();
         std::thread::spawn(move || {
-            let process = std::process::Command::new("cargo")
-                .args(["run"])
-                .stdout(Stdio::piped())
-                .stdin(Stdio::piped())
-                .output();
-            if let Err(e) = process {
-                dir_event_copy
-                    .send(WatcherEvent::Error(e.to_string()))
-                    .unwrap();
-            } else {
-                dir_event_copy.send(WatcherEvent::Exit).unwrap();
+            loop {
+                let process = std::process::Command::new("cargo")
+                    .args(["run"])
+                    .stdout(Stdio::piped())
+                    .stdin(Stdio::piped())
+                    .output();
+
+                match process {
+                    Ok(output) => {
+                        if let Some(status_code) = output.status.code() {
+                            if status_code == 0 {
+                                // Application was closed
+                                dir_event_copy.send(WatcherEvent::Exit).unwrap();
+                                break;
+                            } else {
+                                // Application was terminated
+                                dir_event_copy.send(WatcherEvent::Starting).unwrap();
+                            }
+                        }
+                    }
+                    Err(e) => dir_event_copy
+                        .send(WatcherEvent::Error(e.to_string()))
+                        .unwrap(),
+                }
             }
         });
 
