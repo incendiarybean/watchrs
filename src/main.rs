@@ -1,11 +1,9 @@
 use std::{
     io::{stdout, Write},
-    process::Stdio,
     sync::{mpsc::Sender, Arc, Mutex},
     time::{Duration, SystemTime},
 };
 
-// use colored::{Color, Colorize};
 use crossterm::{
     cursor, queue,
     style::{Color, Print, ResetColor, SetForegroundColor},
@@ -20,13 +18,19 @@ struct Files {
     time: SystemTime,
 }
 
+/// A function to scan directories recursively
+///
+/// # Arguments
+/// * `ignored_paths` - a Vec of Paths to ignore
+/// * `file` - a Path of the file/folder to check currently
+/// * `cb` - a callback function to run when the scan finds a file
 fn visit_dirs(
     ignored_paths: Vec<&std::path::Path>,
-    dir: &std::path::Path,
+    file: &std::path::Path,
     cb: &mut dyn FnMut(std::fs::DirEntry),
 ) -> std::io::Result<()> {
-    if dir.is_dir() && !ignored_paths.contains(&dir) {
-        for entry in std::fs::read_dir(dir)? {
+    if file.is_dir() && !ignored_paths.contains(&file) {
+        for entry in std::fs::read_dir(file)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
@@ -39,26 +43,26 @@ fn visit_dirs(
     Ok(())
 }
 
-fn grab_directory_and_files(path_name: String) -> Result<Vec<Files>, std::io::Error> {
-    let path = std::path::Path::new(&path_name);
-    let mut dir_contents = Vec::<std::fs::DirEntry>::new();
+/// A function to get the files from the selected directory
+///
+/// # Arguments
+/// * `dir_path` - a String representation of a directory path
+fn grab_directory_and_files(dir_path: String) -> Result<Vec<Files>, std::io::Error> {
+    let path = std::path::Path::new(&dir_path);
 
     // TODO: Make this dynamic
     let mut ignored_paths = Vec::<&std::path::Path>::new();
-    let target_dir = format!("{}/target", path_name);
+    let target_dir = format!("{}/target", dir_path);
     ignored_paths.push(std::path::Path::new(&target_dir));
 
-    // Callback to update list of directory contents
-    let mut update_vec = |val| {
-        dir_contents.push(val);
-    };
+    // Generate a list of all files in the selected directory
+    let mut dir_contents = Vec::<std::fs::DirEntry>::new();
+    visit_dirs(ignored_paths, &path, &mut |file| {
+        dir_contents.push(file);
+    })?;
 
-    match visit_dirs(ignored_paths, &path, &mut update_vec) {
-        Ok(_) => {}
-        Err(e) => println!("There was an error! {}", e),
-    }
-
-    let file_names: Vec<Files> = dir_contents
+    // Collect file metadata
+    let file_metadata: Vec<Files> = dir_contents
         .into_iter()
         .map(|item| Files {
             name: item.file_name().to_string_lossy().to_string(),
@@ -67,9 +71,14 @@ fn grab_directory_and_files(path_name: String) -> Result<Vec<Files>, std::io::Er
         })
         .collect();
 
-    Ok(file_names)
+    Ok(file_metadata)
 }
 
+/// A constant directory scanning service
+///
+/// # Arguments
+/// * `dir_event` - an MSPC Sender of type WatcherEvent
+/// * `dir_path` - a String representation of a directory path
 fn dir_runner(dir_event: std::sync::mpsc::Sender<WatcherEvent>, dir_path: String) {
     let mut file_names = grab_directory_and_files(dir_path.clone())
         .expect("Could not retrieve files from Directory.");
@@ -107,6 +116,12 @@ fn dir_runner(dir_event: std::sync::mpsc::Sender<WatcherEvent>, dir_path: String
     }
 }
 
+/// A constant command running service
+///
+/// # Arguments
+/// * `dir_event` - an MSPC Sender of type WatcherEvent
+/// * `dir_cmd` - the command to run, which will respawn on executable termination
+/// * `dir_path` - a String representation of a directory path
 fn cmd_runner(
     dir_event: std::sync::mpsc::Sender<WatcherEvent>,
     _dir_cmd: String,
@@ -115,11 +130,7 @@ fn cmd_runner(
     if cfg!(target_os = "windows") {
         loop {
             // Generate Cargo Run process
-            let child_process = std::process::Command::new("cargo")
-                .args(["run"])
-                .stdout(Stdio::null())
-                .stdin(Stdio::null())
-                .spawn()?;
+            let child_process = std::process::Command::new("cargo").args(["run"]).spawn()?;
 
             // scan and find executable
             let mut exe_name = String::new();
