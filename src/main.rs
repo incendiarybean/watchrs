@@ -1,13 +1,15 @@
-use std::{
-    io::{stdout, Write},
-    sync::{mpsc::Sender, Arc, Mutex},
-    time::{Duration, SystemTime},
-};
+mod runners;
+mod utils;
 
 use crossterm::{
     cursor, queue,
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal,
+};
+use std::{
+    io::{stdout, Write},
+    sync::{mpsc::Sender, Arc, Mutex},
+    time::{Duration, SystemTime},
 };
 use sysinfo::{ProcessExt, System, SystemExt};
 
@@ -29,16 +31,6 @@ pub enum WatcherEvent {
     Exit,
 }
 
-struct WatchDog {
-    dir_cmd: String,
-    dir_path: String,
-    status: Arc<Mutex<WatcherEvent>>,
-    event: Sender<WatcherEvent>,
-}
-
-mod runners;
-mod utils;
-
 impl std::fmt::Display for WatcherEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -51,6 +43,13 @@ impl std::fmt::Display for WatcherEvent {
             WatcherEvent::Exit => write!(f, "EXIT"),
         }
     }
+}
+
+struct WatchDog {
+    dir_cmd: String,
+    dir_path: String,
+    status: Arc<Mutex<WatcherEvent>>,
+    event: Sender<WatcherEvent>,
 }
 
 impl Default for WatchDog {
