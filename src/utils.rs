@@ -55,3 +55,26 @@ pub fn grab_directory_and_files(dir_path: String) -> Result<Vec<Files>, std::io:
 
     Ok(file_metadata)
 }
+
+/// A function to compare two Vecs of a specific type
+///
+/// # Arguments
+/// * `list` - A vec of desired type
+/// * `comparison_list` - A vec of desired type to compare against
+pub fn get_list_differences<Item: PartialEq>(
+    list: Vec<Item>,
+    comparison_list: Vec<Item>,
+) -> Result<Vec<Item>, std::io::Error> {
+    let changes = list
+        .into_iter()
+        .filter(|item| {
+            if comparison_list.contains(item) {
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    Ok(changes)
+}

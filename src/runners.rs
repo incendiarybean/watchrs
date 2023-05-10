@@ -1,5 +1,8 @@
-use crate::{utils, Files, WatcherEvent};
-use std::time::Duration;
+use crate::{
+    utils::{self, get_list_differences},
+    WatcherEvent,
+};
+use std::{sync::mpsc::Sender, time::Duration};
 use sysinfo::{ProcessExt, SystemExt};
 
 /// A constant directory scanning service
@@ -7,7 +10,7 @@ use sysinfo::{ProcessExt, SystemExt};
 /// # Arguments
 /// * `dir_event` - an MSPC Sender of type WatcherEvent
 /// * `dir_path` - a String representation of a directory path
-pub fn dir_runner(dir_event: std::sync::mpsc::Sender<WatcherEvent>, dir_path: String) {
+pub fn dir_runner(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), std::io::Error> {
     let mut file_names = utils::grab_directory_and_files(dir_path.clone())
         .expect("Could not retrieve files from Directory.");
 
@@ -15,29 +18,12 @@ pub fn dir_runner(dir_event: std::sync::mpsc::Sender<WatcherEvent>, dir_path: St
         let file_names_reloaded = utils::grab_directory_and_files(dir_path.clone())
             .expect("Could not retrieve files from Directory.");
 
-        let file_names_reloaded_clone = file_names_reloaded.clone();
+        let changes = get_list_differences(file_names_reloaded.clone(), file_names.clone())
+            .expect("Couldn't get file differences, check permissions.");
 
-        let file_changes: Vec<Files> = file_names_reloaded
-            .into_iter()
-            .filter(|file| {
-                // iterate between files and check if they match their counterpart in file_names_reloaded
-                if !file_names.contains(file) {
-                    true
-                } else {
-                    false
-                }
-            })
-            .collect();
-
-        // If different file was saved previously
-        if file_names != file_names_reloaded_clone {
-            // Reset current files
-            file_names = file_names_reloaded_clone;
-
-            // This should only print the once
-            dir_event
-                .send(WatcherEvent::FileChanged(file_changes))
-                .unwrap();
+        if changes.len() > 0 {
+            event.send(WatcherEvent::FileChanged(changes)).unwrap();
+            file_names = file_names_reloaded;
         }
 
         std::thread::sleep(Duration::from_millis(1000));
@@ -50,15 +36,14 @@ pub fn dir_runner(dir_event: std::sync::mpsc::Sender<WatcherEvent>, dir_path: St
 /// * `dir_event` - an MSPC Sender of type WatcherEvent
 /// * `dir_cmd` - the command to run, which will respawn on executable termination
 /// * `dir_path` - a String representation of a directory path
-pub fn cmd_runner(
-    dir_event: std::sync::mpsc::Sender<WatcherEvent>,
-    _dir_cmd: String,
-    dir_path: String,
-) -> Result<(), std::io::Error> {
+pub fn cmd_runner(dir_path: String, event: Sender<WatcherEvent>) {
     if cfg!(target_os = "windows") {
         loop {
             // Generate Cargo Run process
-            let child_process = std::process::Command::new("cargo").args(["run"]).spawn()?;
+            let child_process = std::process::Command::new("cargo")
+                .args(["run"])
+                .spawn()
+                .expect("Could not create child process from given command.");
 
             // scan and find executable
             let mut exe_name = String::new();
@@ -78,7 +63,7 @@ pub fn cmd_runner(
                 for (pid, process) in sys.processes() {
                     if exe_name == process.name().to_owned() {
                         let pid = pid.to_owned();
-                        dir_event.send(WatcherEvent::Watching(pid)).unwrap();
+                        event.send(WatcherEvent::Watching(pid)).unwrap();
                         exec_running = true;
                         break;
                     }
@@ -96,16 +81,15 @@ pub fn cmd_runner(
                     if let Some(status_code) = output.status.code() {
                         if status_code == 0 {
                             // Application was closed
-                            dir_event.send(WatcherEvent::Exit).unwrap();
+                            event.send(WatcherEvent::Exit).unwrap();
                         } else {
                             // Application was terminated
-                            dir_event.send(WatcherEvent::Starting).unwrap();
+                            event.send(WatcherEvent::Starting).unwrap();
                         }
                     }
                 }
-                Err(e) => dir_event.send(WatcherEvent::Error(e.to_string())).unwrap(),
+                Err(e) => event.send(WatcherEvent::Error(e.to_string())).unwrap(),
             }
         }
     }
-    Ok(())
 }
