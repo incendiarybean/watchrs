@@ -84,39 +84,6 @@ impl WatchRs {
         Ok(())
     }
 
-    /// A directory scanning service that waits for changes
-    ///
-    /// # Arguments
-    /// * `dir_event` - an MSPC Sender of type WatcherEvent
-    /// * `dir_path` - a String representation of a directory path
-    pub fn dir_watcher(
-        dir_path: String,
-        event: Sender<WatcherEvent>,
-    ) -> Result<(), std::io::Error> {
-        let file_names = utils::grab_directory_and_files(dir_path.clone())
-            .expect("Could not retrieve files from Directory.");
-
-        loop {
-            let file_names_reloaded = utils::grab_directory_and_files(dir_path.clone())
-                .expect("Could not retrieve files from Directory.");
-
-            let changes =
-                utils::get_list_differences(file_names_reloaded.clone(), file_names.clone())
-                    .expect("Couldn't get file differences, check permissions.");
-
-            if changes.len() > 0 {
-                event
-                    .send(WatcherEvent::FileChanged(changes))
-                    .expect("Could not send event.");
-                break;
-            }
-
-            std::thread::sleep(Duration::from_millis(1000));
-        }
-
-        Ok(())
-    }
-
     /// Create directory watcher
     /// Watches directory and sends event on changes
     fn spawn_directory_watcher(&self) {
@@ -124,7 +91,7 @@ impl WatchRs {
         let event = self.event.clone();
         std::thread::Builder::new()
             .name("DirWatcher".to_string())
-            .spawn(|| Self::dir_watcher(path, event))
+            .spawn(|| utils::dir_watcher(path, event))
             .expect("Could not spawn thread!");
     }
 
