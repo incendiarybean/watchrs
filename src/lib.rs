@@ -8,7 +8,7 @@ use crossterm::{
 use std::{
     io::{stdout, Write},
     sync::mpsc::{Receiver, Sender},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 use sysinfo::{ProcessExt, System, SystemExt};
 
