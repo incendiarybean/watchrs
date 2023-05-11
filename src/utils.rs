@@ -163,6 +163,7 @@ pub fn cmd_runner(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), s
                 }
 
                 sys.refresh_processes();
+                std::thread::sleep(Duration::from_millis(200));
             }
 
             match child_process.wait_with_output() {
