@@ -1,4 +1,3 @@
-mod runners;
 pub mod utils;
 
 use crossterm::{
@@ -9,7 +8,7 @@ use crossterm::{
 use std::{
     io::{stdout, Write},
     sync::mpsc::{Receiver, Sender},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use sysinfo::{ProcessExt, System, SystemExt};
 
@@ -60,6 +59,7 @@ impl Default for WatchRs {
 }
 
 impl WatchRs {
+    /// Launches an instance of WatchRS
     pub fn begin_watching(self) -> Result<(), std::io::Error> {
         let mut stdout = stdout();
         queue!(
@@ -72,31 +72,74 @@ impl WatchRs {
         )
         .expect("Could not write to stdout.");
 
-        stdout.flush().unwrap();
+        stdout.flush().expect("Could not flush on Stdout");
 
-        self.spawn_watchers();
+        // Start processes
+        self.spawn_directory_watcher();
+        self.spawn_command_runner();
 
+        // Handle events
         self.event_handler();
 
         Ok(())
     }
 
-    fn spawn_watchers(&self) {
+    /// A directory scanning service that waits for changes
+    ///
+    /// # Arguments
+    /// * `dir_event` - an MSPC Sender of type WatcherEvent
+    /// * `dir_path` - a String representation of a directory path
+    pub fn dir_watcher(
+        dir_path: String,
+        event: Sender<WatcherEvent>,
+    ) -> Result<(), std::io::Error> {
+        let file_names = utils::grab_directory_and_files(dir_path.clone())
+            .expect("Could not retrieve files from Directory.");
+
+        loop {
+            let file_names_reloaded = utils::grab_directory_and_files(dir_path.clone())
+                .expect("Could not retrieve files from Directory.");
+
+            let changes =
+                utils::get_list_differences(file_names_reloaded.clone(), file_names.clone())
+                    .expect("Couldn't get file differences, check permissions.");
+
+            if changes.len() > 0 {
+                event
+                    .send(WatcherEvent::FileChanged(changes))
+                    .expect("Could not send event.");
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(1000));
+        }
+
+        Ok(())
+    }
+
+    /// Create directory watcher
+    /// Watches directory and sends event on changes
+    fn spawn_directory_watcher(&self) {
         let path = self.dir_path.clone();
         let event = self.event.clone();
         std::thread::Builder::new()
             .name("DirWatcher".to_string())
-            .spawn(|| runners::dir_runner(path, event))
+            .spawn(|| Self::dir_watcher(path, event))
             .expect("Could not spawn thread!");
+    }
 
+    /// Create command runner
+    /// Creates and waits for process to end
+    fn spawn_command_runner(&self) {
         let path = self.dir_path.clone();
         let event = self.event.clone();
         std::thread::Builder::new()
             .name("CommandRunner".to_string())
-            .spawn(|| runners::cmd_runner(path, event))
+            .spawn(|| utils::cmd_runner(path, event))
             .expect("Could not spawn thread!");
     }
 
+    /// Handles incoming events from watchers & runners
     fn event_handler(mut self) {
         let mut stdout = stdout();
 
@@ -164,10 +207,12 @@ impl WatchRs {
                             }
                         }
 
-                        self.status = WatcherEvent::Starting;
+                        // Restart watch service
+                        self.spawn_directory_watcher();
                     }
                     WatcherEvent::Error(err) => {
-                        queue!(stdout, SetForegroundColor(Color::Red), Print(err)).unwrap();
+                        queue!(stdout, SetForegroundColor(Color::Red), Print(err))
+                            .expect("Could not write to stdout.");
                     }
                     WatcherEvent::Exit => {
                         queue!(
