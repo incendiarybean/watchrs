@@ -8,7 +8,7 @@ use crossterm::{
 use std::{
     io::{stdout, Write},
     sync::mpsc::{Receiver, Sender},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use sysinfo::{ProcessExt, System, SystemExt};
 
@@ -88,11 +88,20 @@ impl WatchRs {
     /// Watches directory and sends event on changes
     fn spawn_directory_watcher(&self) {
         let path = self.dir_path.clone();
-        let event = self.event.clone();
-        std::thread::Builder::new()
+        let dir_watcher = std::thread::Builder::new()
             .name("DirWatcher".to_string())
-            .spawn(|| utils::dir_watcher(path, event))
+            .spawn(|| {
+                utils::dir_watcher(path, Duration::from_millis(1000))
+                    .expect("Could not find changes.")
+            })
             .expect("Could not spawn thread!");
+
+        let file_changes = dir_watcher
+            .join()
+            .expect("Could not retrieve file changes from thread.");
+        self.event
+            .send(WatcherEvent::FileChanged(file_changes))
+            .expect("Could not send event.");
     }
 
     /// Create command runner

@@ -220,10 +220,13 @@ mod tests {
         let (test_path, _files) = generate_test_files(String::from("tmp-dir-runner"), file_count)
             .expect("Couldn't create test files!");
 
-        let (sender, receiver) = std::sync::mpsc::channel::<WatcherEvent>();
-
         let thread_path_clone = test_path.clone();
-        let worker = std::thread::spawn(move || utils::dir_watcher(thread_path_clone, sender));
+        let worker = std::thread::spawn(move || {
+            let actual_result =
+                utils::dir_watcher(thread_path_clone, Duration::from_millis(1000)).unwrap();
+
+            return actual_result;
+        });
 
         // Wait a moment, to ensure that files have been collected first
         std::thread::sleep(Duration::from_millis(500));
@@ -237,21 +240,13 @@ mod tests {
             time: test_file.metadata().unwrap().modified().unwrap(),
         }];
 
-        match receiver.recv() {
-            Ok(event) => match event {
-                WatcherEvent::FileChanged(actual_result) => {
-                    // Clear files before assertion, in case assertion
-                    cleanup_test_files(test_path).expect("Couldn't clean up files!");
+        let actual_result = worker.join().unwrap();
 
-                    assert_eq!(actual_result.len(), 1);
-                    assert_eq!(actual_result, expected_result);
-                }
-                _ => panic!(),
-            },
-            _ => panic!(),
-        }
+        // Clear files before assertion, in case assertion
+        cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
-        assert!(worker.join().is_ok());
+        assert_eq!(actual_result.len(), 1);
+        assert_eq!(actual_result, expected_result);
     }
 
     #[test]

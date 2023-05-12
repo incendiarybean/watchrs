@@ -86,15 +86,15 @@ pub fn get_list_differences<Item: PartialEq>(
 }
 
 /// A directory scanning service that waits for changes
+/// Checks on a variable Duration
 ///
 /// # Arguments
-/// * `dir_event` - an MSPC Sender of type WatcherEvent
 /// * `dir_path` - a String representation of a directory path
-pub fn dir_watcher(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), std::io::Error> {
+/// * `interval` - a custom duration to check directory on
+pub fn dir_watcher(dir_path: String, interval: Duration) -> Result<Vec<Files>, std::io::Error> {
     let file_names = grab_directory_and_files(dir_path.clone())
         .expect("Could not retrieve files from Directory.");
-
-    loop {
+    let changes = loop {
         let file_names_reloaded = grab_directory_and_files(dir_path.clone())
             .expect("Could not retrieve files from Directory.");
 
@@ -102,16 +102,13 @@ pub fn dir_watcher(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), 
             .expect("Couldn't get file differences, check permissions.");
 
         if changes.len() > 0 {
-            event
-                .send(WatcherEvent::FileChanged(changes))
-                .expect("Could not send event.");
-            break;
+            break changes;
         }
 
-        std::thread::sleep(Duration::from_millis(1000));
-    }
+        std::thread::sleep(interval);
+    };
 
-    Ok(())
+    Ok(changes)
 }
 
 /// An async function to retreive the a executable name using the given output directory
