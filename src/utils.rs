@@ -115,7 +115,6 @@ pub fn dir_watcher(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), 
 }
 
 /// An async function to retreive the a executable name using the given output directory
-/// This function may not complete instantly, depending on folder structure - hence async
 ///
 /// TODO: Allow dynamic target directory
 ///
@@ -140,7 +139,6 @@ pub fn get_executable_from_dir(dir_path: String) -> Result<String, std::io::Erro
 }
 
 /// A function to retreive the a process ID by the name of the executable
-/// This function may not complete instantly, depending on process timings - hence async
 ///
 /// # Arguments
 /// * `exe_name` - String notation of the executable name e.g. watchrs.exe

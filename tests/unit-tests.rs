@@ -11,32 +11,58 @@ mod tests {
         Files, WatchRs, WatcherEvent,
     };
 
+    // Test Example
+    // #[test]
+    // fn watch_rs_test_name() {
+    //     // Test setup
+    //     let (test_path, _files) = generate_test_files(String::from("TEMPLATE_DIR"))
+    //         .expect("Couldn't create test files!");
+    //
+    //     // Clear files before assertion, in case assertion
+    //     cleanup_test_files(test_path).expect("Couldn't clean up files!");
+    // }
+
     /// Function to generate the test folders in the given path.
     /// We use a given path so each test has its own temporary folder.
     /// This stops the tests from trying to access a directory that may have been recently deleted while running in parallel.
     ///
     /// # Arguments
     /// * `path` - String notation of the temporary folder to create
-    fn generate_test_files(path: String) -> Result<(String, Vec<std::fs::File>), std::io::Error> {
+    fn generate_test_files(
+        path: String,
+        file_count: u8,
+    ) -> Result<(String, Vec<std::fs::File>), std::io::Error> {
         let test_path = format!(
             "{}\\tests\\{}",
             std::env::current_dir().unwrap().to_string_lossy(),
             path
         );
-        let test_folder_0 = std::fs::create_dir_all(format!("{}\\src", test_path));
-        let test_folder_1 = std::fs::create_dir_all(format!("{}\\target\\debug", test_path));
-        let test_file_0 = std::fs::File::create(format!("{}\\src\\test_0.txt", test_path));
-        let test_file_1 = std::fs::File::create(format!("{}\\src\\test_1.txt", test_path));
-        let test_exe_0 =
+
+        // Generate test folder structure
+        let folders = vec![String::from("src"), String::from("target\\debug")];
+        for folder in folders {
+            let test_folder = std::fs::create_dir_all(format!("{}\\{}", test_path, folder));
+
+            assert!(test_folder.is_ok());
+        }
+
+        let mut files = Vec::<std::fs::File>::new();
+        for file in 0..file_count {
+            let test_file: Result<std::fs::File, std::io::Error> =
+                std::fs::File::create(format!("{}\\src\\test_{}.txt", test_path, file));
+
+            assert!(test_file.is_ok());
+
+            files.push(test_file.unwrap());
+        }
+
+        // Generate executable files
+        let test_exe =
             std::fs::File::create(format!("{}\\target\\debug\\test_exe_0.exe", test_path));
 
-        assert!(test_folder_0.is_ok());
-        assert!(test_folder_1.is_ok());
-        assert!(test_file_0.is_ok());
-        assert!(test_file_1.is_ok());
-        assert!(test_exe_0.is_ok());
+        assert!(test_exe.is_ok());
 
-        Ok((test_path, vec![test_file_0.unwrap(), test_file_1.unwrap()]))
+        Ok((test_path, files))
     }
 
     /// Function to delete the test folders in the given path.
@@ -84,7 +110,7 @@ mod tests {
     #[test]
     fn watch_rs_file_discovery() {
         // Test setup
-        let (test_path, _files) = generate_test_files(String::from("tmp-discovery"))
+        let (test_path, _files) = generate_test_files(String::from("tmp-discovery"), 10)
             .expect("Couldn't create test files!");
 
         // Check WatchRS finds all files in the selected directory
@@ -99,7 +125,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(actual_result.len(), 3);
+        assert_eq!(actual_result.len(), 11);
 
         // Check WatchRS ignores all files in ignored_paths
         let ignore_folder_path = format!("{}\\target\\debug", test_path);
@@ -119,34 +145,31 @@ mod tests {
         // Clear files before assertion, in case assertion
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
-        assert_eq!(actual_result.len(), 2);
+        assert_eq!(actual_result.len(), 10);
     }
 
     #[test]
     fn watch_rs_file_formatter() {
         // Test setup
-        let (test_path, files) = generate_test_files(String::from("tmp-formatter"))
+        let file_count = 10;
+        let (test_path, files) = generate_test_files(String::from("tmp-formatter"), file_count)
             .expect("Couldn't create test files!");
 
         let mut actual_result = grab_directory_and_files(test_path.clone()).unwrap();
 
-        let mut expected_result = vec![
-            Files {
-                name: String::from("test_0.txt"),
-                path: format!("{}\\src\\test_0.txt", test_path),
+        let mut expected_result = Vec::<Files>::new();
+        for file in 0..file_count {
+            expected_result.push(Files {
+                name: format!("test_{}.txt", file),
+                path: format!("{}\\src\\test_{}.txt", test_path, file),
                 time: files[0].metadata().unwrap().modified().unwrap(),
-            },
-            Files {
-                name: String::from("test_1.txt"),
-                path: format!("{}\\src\\test_1.txt", test_path),
-                time: files[1].metadata().unwrap().modified().unwrap(),
-            },
-        ];
+            })
+        }
 
         // Clear files before assertion, in case assertion
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
-        assert_eq!(actual_result.len(), 2);
+        assert_eq!(actual_result.len(), 10);
         assert_eq!(
             actual_result.sort_by_key(|item| item.name.clone()),
             expected_result.sort_by_key(|item| item.name.clone())
@@ -193,7 +216,8 @@ mod tests {
     #[test]
     fn watch_rs_directory_watcher() {
         // Test setup
-        let (test_path, _files) = generate_test_files(String::from("tmp-dir-runner"))
+        let file_count = 10;
+        let (test_path, _files) = generate_test_files(String::from("tmp-dir-runner"), file_count)
             .expect("Couldn't create test files!");
 
         let (sender, receiver) = std::sync::mpsc::channel::<WatcherEvent>();
@@ -204,13 +228,13 @@ mod tests {
         // Wait a moment, to ensure that files have been collected first
         std::thread::sleep(Duration::from_millis(500));
 
-        let new_test_file_path = format!("{}\\test_2.txt", test_path);
-        let test_file_2 =
+        let new_test_file_path = format!("{}\\test_{}.txt", test_path, file_count + 1);
+        let test_file =
             std::fs::File::create(new_test_file_path).expect("Couldn't create test file 2.");
         let expected_result = vec![Files {
-            name: String::from("test_2.txt"),
-            path: format!("{}\\test_2.txt", test_path),
-            time: test_file_2.metadata().unwrap().modified().unwrap(),
+            name: format!("test_{}.txt", file_count + 1),
+            path: format!("{}\\test_{}.txt", test_path, file_count + 1),
+            time: test_file.metadata().unwrap().modified().unwrap(),
         }];
 
         match receiver.recv() {
@@ -233,8 +257,10 @@ mod tests {
     #[test]
     fn watch_rs_get_exe_from_dir() {
         // Test setup
-        let (test_path, _files) = generate_test_files(String::from("tmp-exe-dir-finder"))
-            .expect("Couldn't create test files!");
+        let file_count = 5;
+        let (test_path, _files) =
+            generate_test_files(String::from("tmp-exe-dir-finder"), file_count)
+                .expect("Couldn't create test files!");
 
         // Check that an executable name is returned from a valid build directory
         let exe_name = get_executable_from_dir(test_path.clone()).unwrap();
@@ -246,9 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn watch_rs_test_name() {
+    fn watch_rs_get_pid_from_exe_name() {
         // Test setup
-        let (test_path, _files) = generate_test_files(String::from("tmp-pid-finder"))
+        let file_count = 5;
+        let (test_path, _files) = generate_test_files(String::from("tmp-pid-finder"), file_count)
             .expect("Couldn't create test files!");
 
         // Check that a PID is returned when supplied a valid running process name
@@ -259,15 +286,4 @@ mod tests {
 
         assert_ne!(pid, sysinfo::Pid::from(0));
     }
-
-    // Test Example
-    // #[test]
-    // fn watch_rs_test_name() {
-    //     // Test setup
-    //     let (test_path, _files) = generate_test_files(String::from("TEMPLATE_DIR"))
-    //         .expect("Couldn't create test files!");
-    //
-    //     // Clear files before assertion, in case assertion
-    //     cleanup_test_files(test_path).expect("Couldn't clean up files!");
-    // }
 }

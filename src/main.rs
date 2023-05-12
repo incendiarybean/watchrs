@@ -1,8 +1,7 @@
 use watchrs::WatchRs;
 
 fn main() {
-    let watch_dog = WatchRs::default();
-    watch_dog
+    WatchRs::default()
         .begin_watching()
         .expect("Couldn't begin watching.");
 }
