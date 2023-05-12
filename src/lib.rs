@@ -22,7 +22,7 @@ pub struct Files {
 #[derive(Clone, PartialEq, Debug)]
 pub enum WatcherEvent {
     Starting,
-    Watching(sysinfo::Pid),
+    Watching(sysinfo::Pid, Vec<String>),
     FileChanged(Vec<Files>),
     Stopping,
     Stopped,
@@ -88,20 +88,22 @@ impl WatchRs {
     /// Watches directory and sends event on changes
     fn spawn_directory_watcher(&self) {
         let path = self.dir_path.clone();
-        let dir_watcher = std::thread::Builder::new()
+        self.event
+            .send(WatcherEvent::Starting)
+            .expect("Could not send event.");
+
+        let event = self.event.clone();
+        std::thread::Builder::new()
             .name("DirWatcher".to_string())
-            .spawn(|| {
-                utils::dir_watcher(path, Duration::from_millis(1000))
-                    .expect("Could not find changes.")
+            .spawn(move || {
+                let file_changes = utils::dir_watcher(path, Duration::from_millis(1000))
+                    .expect("Could not find changes.");
+                event
+                    .clone()
+                    .send(WatcherEvent::FileChanged(file_changes))
+                    .expect("Could not send event.");
             })
             .expect("Could not spawn thread!");
-
-        let file_changes = dir_watcher
-            .join()
-            .expect("Could not retrieve file changes from thread.");
-        self.event
-            .send(WatcherEvent::FileChanged(file_changes))
-            .expect("Could not send event.");
     }
 
     /// Create command runner
@@ -111,7 +113,36 @@ impl WatchRs {
         let event = self.event.clone();
         std::thread::Builder::new()
             .name("CommandRunner".to_string())
-            .spawn(|| utils::cmd_runner(path, event))
+            .spawn(move || loop {
+                let (child_process, pid, exe_names) =
+                    utils::cmd_runner(path.clone()).expect("Could not run command successfully.");
+
+                event
+                    .send(WatcherEvent::Watching(pid, exe_names))
+                    .expect("Could not send event.");
+
+                match child_process.wait_with_output() {
+                    Ok(output) => {
+                        if let Some(status_code) = output.status.code() {
+                            if status_code == 0 {
+                                // Application was closed
+                                event
+                                    .send(WatcherEvent::Exit)
+                                    .expect("Could not send event.");
+                                break;
+                            } else {
+                                // Application was terminated
+                                event
+                                    .send(WatcherEvent::Starting)
+                                    .expect("Could not send event.");
+                            }
+                        }
+                    }
+                    Err(e) => event
+                        .send(WatcherEvent::Error(e.to_string()))
+                        .expect("Could not send event."),
+                }
+            })
             .expect("Could not spawn thread!");
     }
 
@@ -122,13 +153,59 @@ impl WatchRs {
         loop {
             match self.watcher.recv() {
                 Ok(event) => match event {
-                    WatcherEvent::Watching(process_id) => {
+                    WatcherEvent::Watching(process_id, exe_names) => {
                         self.process_id = Some(process_id);
 
                         queue!(
                             stdout,
                             terminal::Clear(terminal::ClearType::All),
-                            cursor::MoveTo(0, 0),
+                            cursor::MoveTo(0, 0)
+                        )
+                        .unwrap();
+
+                        queue!(
+                            stdout,
+                            SetForegroundColor(Color::Cyan),
+                            Print(format!("Process ID:")),
+                            cursor::MoveRight(2),
+                            SetForegroundColor(Color::Green),
+                            Print(process_id),
+                            cursor::MoveToNextLine(1),
+                            SetForegroundColor(Color::Cyan),
+                            Print(format!("Executable:")),
+                            SetForegroundColor(Color::Green),
+                        )
+                        .unwrap();
+
+                        if exe_names.len() > 1 {
+                            for exe in exe_names.clone() {
+                                queue!(stdout, cursor::MoveRight(2), Print(format!("{exe}")))
+                                    .unwrap();
+                            }
+                            queue!(
+                                stdout,
+                                SetForegroundColor(Color::Red),
+                                cursor::MoveToNextLine(1),
+                                Print("WARNING: Expected 1 platform associated executable but found multiple."),
+                                cursor::MoveToNextLine(1),
+                                Print("Has this project been renamed?"),
+                                cursor::MoveToNextLine(1),
+                                Print("If you encounter issues, remove the excess executables in the ./target/debug folder."),
+                                cursor::MoveToNextLine(2)
+                            )
+                            .unwrap();
+                        } else {
+                            queue!(
+                                stdout,
+                                cursor::MoveRight(2),
+                                Print(format!("{}", exe_names[0]))
+                            )
+                            .unwrap();
+                        }
+
+                        queue!(
+                            stdout,
+                            cursor::MoveToNextLine(1),
                             SetForegroundColor(Color::Cyan),
                             Print("Watching directory for changes:"),
                             cursor::MoveToNextLine(1),
@@ -183,7 +260,7 @@ impl WatchRs {
                             }
                         }
 
-                        // Restart watch service
+                        // Restart Directory Service
                         self.spawn_directory_watcher();
                     }
                     WatcherEvent::Error(err) => {

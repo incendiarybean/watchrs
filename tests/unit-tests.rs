@@ -239,7 +239,6 @@ mod tests {
             path: format!("{}\\test_{}.txt", test_path, file_count + 1),
             time: test_file.metadata().unwrap().modified().unwrap(),
         }];
-
         let actual_result = worker.join().unwrap();
 
         // Clear files before assertion, in case assertion
@@ -258,12 +257,12 @@ mod tests {
                 .expect("Couldn't create test files!");
 
         // Check that an executable name is returned from a valid build directory
-        let exe_name = get_executable_from_dir(test_path.clone()).unwrap();
+        let exe_names = get_executable_from_dir(test_path.clone()).unwrap();
 
         // Clear files before assertion, in case assertion
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
-        assert_eq!(exe_name, String::from("test_exe_0.exe"));
+        assert_eq!(exe_names, vec![String::from("test_exe_0.exe")]);
     }
 
     #[test]
@@ -274,7 +273,7 @@ mod tests {
             .expect("Couldn't create test files!");
 
         // Check that a PID is returned when supplied a valid running process name
-        let pid = get_executable_id(String::from("cargo.exe")).unwrap();
+        let pid = get_executable_id(vec![String::from("cargo.exe")]).unwrap();
 
         // Clear files before assertion, in case assertion
         cleanup_test_files(test_path).expect("Couldn't clean up files!");

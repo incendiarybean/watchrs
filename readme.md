@@ -31,3 +31,5 @@ Run using (in the desired directory):
 - [ ] Accept object (of unspecified type) to gather arguments/features from (nodemon style).
 - [ ] Run check for duplicate spawning of resources.
 - [ ] Incorporate a better way of monitoring running instances (processes).
+- [ ] Write TOML configuration reader.
+- [ ] Make compatible as nodemon replacement?
