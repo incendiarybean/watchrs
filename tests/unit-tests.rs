@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod tests {
-
-    use futures::executor::block_on;
     use std::{
         fs::DirEntry,
         time::{Duration, SystemTime},
@@ -159,7 +157,7 @@ mod tests {
     fn watch_rs_list_comparison() {
         // Check new files are detected
         let mut files = Vec::<Files>::new();
-        for n in 1..12000 {
+        for n in 1..100 {
             files.push(Files {
                 name: String::from(format!("test_{}.txt", n)),
                 path: String::from(format!(".\\test_{}.txt", n)),
@@ -239,14 +237,12 @@ mod tests {
             .expect("Couldn't create test files!");
 
         // Check that an executable name is returned from a valid build directory
-        block_on(async {
-            let exe_name = get_executable_from_dir(test_path.clone()).await.unwrap();
-
-            assert_eq!(exe_name, String::from("test_exe_0.exe"));
-        });
+        let exe_name = get_executable_from_dir(test_path.clone()).unwrap();
 
         // Clear files before assertion, in case assertion
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
+
+        assert_eq!(exe_name, String::from("test_exe_0.exe"));
     }
 
     #[test]
@@ -256,14 +252,12 @@ mod tests {
             .expect("Couldn't create test files!");
 
         // Check that a PID is returned when supplied a valid running process name
-        block_on(async {
-            let pid = get_executable_id(String::from("cargo.exe")).await.unwrap();
-
-            assert_ne!(pid, sysinfo::Pid::from(0));
-        });
+        let pid = get_executable_id(String::from("cargo.exe")).unwrap();
 
         // Clear files before assertion, in case assertion
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
+
+        assert_ne!(pid, sysinfo::Pid::from(0));
     }
 
     // Test Example

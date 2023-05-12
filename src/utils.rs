@@ -121,7 +121,7 @@ pub fn dir_watcher(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), 
 ///
 /// # Arguments
 /// * `dir_path` - The directory to search for executables
-pub async fn get_executable_from_dir(dir_path: String) -> Result<String, std::io::Error> {
+pub fn get_executable_from_dir(dir_path: String) -> Result<String, std::io::Error> {
     let mut exe_name = String::new();
     for entry in std::fs::read_dir(dir_path.clone() + "/target/debug")
         .expect("Couldn't search directory for executables")
@@ -144,7 +144,7 @@ pub async fn get_executable_from_dir(dir_path: String) -> Result<String, std::io
 ///
 /// # Arguments
 /// * `exe_name` - String notation of the executable name e.g. watchrs.exe
-pub async fn get_executable_id(exe_name: String) -> Result<sysinfo::Pid, std::io::Error> {
+pub fn get_executable_id(exe_name: String) -> Result<sysinfo::Pid, std::io::Error> {
     let mut sys = sysinfo::System::new();
     let mut exec_running = false;
     let pid = loop {
@@ -187,17 +187,17 @@ pub async fn cmd_runner(
                 .expect("Could not create child process from given command.");
 
             // Scan and find Executable name
-            let exe_name = get_executable_from_dir(dir_path.clone())
-                .await
-                .expect("Couldn't get executable name.");
+            let exe_name =
+                get_executable_from_dir(dir_path.clone()).expect("Couldn't get executable name.");
 
             // Scan and find Process ID
             let pid = get_executable_id(exe_name)
-                .await
                 .expect("Couldn't retrieve process ID from executable name.");
             event
                 .send(WatcherEvent::Watching(pid))
                 .expect("Could not send event.");
+
+            println!("{pid}");
 
             match child_process.wait_with_output() {
                 Ok(output) => {
