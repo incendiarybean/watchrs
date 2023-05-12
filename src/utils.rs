@@ -1,6 +1,6 @@
 use crate::{Files, WatcherEvent};
 use std::{sync::mpsc::Sender, time::Duration};
-use sysinfo::{ProcessExt, SystemExt};
+use sysinfo::{PidExt, ProcessExt, SystemExt};
 
 /// A function to scan directories recursively
 ///
@@ -114,57 +114,90 @@ pub fn dir_watcher(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), 
     Ok(())
 }
 
+/// An async function to retreive the a executable name using the given output directory
+/// This function may not complete instantly, depending on folder structure - hence async
+///
+/// TODO: Allow dynamic target directory
+///
+/// # Arguments
+/// * `dir_path` - The directory to search for executables
+pub async fn get_executable_from_dir(dir_path: String) -> Result<String, std::io::Error> {
+    let mut exe_name = String::new();
+    for entry in std::fs::read_dir(dir_path.clone() + "/target/debug")
+        .expect("Couldn't search directory for executables")
+    {
+        if let Some(found_file) = entry.expect("Could not find file.").file_name().to_str() {
+            if cfg!(target_os = "windows") {
+                if found_file.contains(".exe") {
+                    exe_name = found_file.to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(exe_name)
+}
+
+/// A function to retreive the a process ID by the name of the executable
+/// This function may not complete instantly, depending on process timings - hence async
+///
+/// # Arguments
+/// * `exe_name` - String notation of the executable name e.g. watchrs.exe
+pub async fn get_executable_id(exe_name: String) -> Result<sysinfo::Pid, std::io::Error> {
+    let mut sys = sysinfo::System::new();
+    let mut exec_running = false;
+    let pid = loop {
+        let mut process_id = sysinfo::Pid::from_u32(0);
+        for (pid, process) in sys.processes() {
+            if exe_name == process.name().to_owned() {
+                exec_running = true;
+                process_id = pid.to_owned();
+                break;
+            }
+        }
+
+        if exec_running {
+            break process_id;
+        }
+
+        sys.refresh_processes();
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    Ok(pid)
+}
+
 /// A constant command running service
 ///
 /// # Arguments
 /// * `dir_event` - an MSPC Sender of type WatcherEvent
 /// * `dir_cmd` - the command to run, which will respawn on executable termination
 /// * `dir_path` - a String representation of a directory path
-pub fn cmd_runner(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), std::io::Error> {
+pub async fn cmd_runner(
+    dir_path: String,
+    event: Sender<WatcherEvent>,
+) -> Result<(), std::io::Error> {
     if cfg!(target_os = "windows") {
         loop {
             // Generate Cargo Run process
             let child_process = std::process::Command::new("cargo")
-                // .current_dir()
-                .env("PATH", dir_path.clone())
                 .args(["run"])
                 .spawn()
                 .expect("Could not create child process from given command.");
 
-            // scan and find executable
-            let mut exe_name = String::new();
-            for entry in std::fs::read_dir(dir_path.clone() + "/target/debug")
-                .expect("Couldn't search directory for executables")
-            {
-                if let Some(found_file) = entry.expect("Could not find file.").file_name().to_str()
-                {
-                    if found_file.contains(".exe") {
-                        exe_name = found_file.to_string();
-                    }
-                }
-            }
+            // Scan and find Executable name
+            let exe_name = get_executable_from_dir(dir_path.clone())
+                .await
+                .expect("Couldn't get executable name.");
 
-            let mut sys = sysinfo::System::new();
-            let mut exec_running = false;
-            loop {
-                for (pid, process) in sys.processes() {
-                    if exe_name == process.name().to_owned() {
-                        let pid = pid.to_owned();
-                        event
-                            .send(WatcherEvent::Watching(pid))
-                            .expect("Could not send event.");
-                        exec_running = true;
-                        break;
-                    }
-                }
-
-                if exec_running {
-                    break;
-                }
-
-                sys.refresh_processes();
-                std::thread::sleep(Duration::from_millis(200));
-            }
+            // Scan and find Process ID
+            let pid = get_executable_id(exe_name)
+                .await
+                .expect("Couldn't retrieve process ID from executable name.");
+            event
+                .send(WatcherEvent::Watching(pid))
+                .expect("Could not send event.");
 
             match child_process.wait_with_output() {
                 Ok(output) => {
@@ -174,6 +207,9 @@ pub fn cmd_runner(dir_path: String, event: Sender<WatcherEvent>) -> Result<(), s
                             event
                                 .send(WatcherEvent::Exit)
                                 .expect("Could not send event.");
+
+                            // Don't loop if program was exited
+                            break;
                         } else {
                             // Application was terminated
                             event

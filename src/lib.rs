@@ -5,6 +5,7 @@ use crossterm::{
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal,
 };
+use futures::executor::block_on;
 use std::{
     io::{stdout, Write},
     sync::mpsc::{Receiver, Sender},
@@ -76,6 +77,8 @@ impl WatchRs {
 
         // Start processes
         self.spawn_directory_watcher();
+        println!("Begin CMD runner");
+
         self.spawn_command_runner();
 
         // Handle events
@@ -102,7 +105,7 @@ impl WatchRs {
         let event = self.event.clone();
         std::thread::Builder::new()
             .name("CommandRunner".to_string())
-            .spawn(|| utils::cmd_runner(path, event))
+            .spawn(|| block_on(utils::cmd_runner(path, event)))
             .expect("Could not spawn thread!");
     }
 
