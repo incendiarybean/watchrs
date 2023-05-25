@@ -18,7 +18,7 @@ mod tests {
     //     let (test_path, _files) = generate_test_files(String::from("TEMPLATE_DIR"))
     //         .expect("Couldn't create test files!");
     //
-    //     // Clear files before assertion, in case assertion
+    //     // Clear files before assertion, in case assertion fails
     //     cleanup_test_files(test_path).expect("Couldn't clean up files!");
     // }
 
@@ -115,10 +115,10 @@ mod tests {
 
         // Check WatchRS finds all files in the selected directory
         let mut actual_result = Vec::<DirEntry>::new();
-        let ignored_paths = Vec::<&std::path::Path>::new();
+        let ignore_paths = Vec::<std::path::PathBuf>::new();
         visit_dirs(
-            ignored_paths.clone(),
-            std::path::Path::new(&test_path),
+            ignore_paths.clone(),
+            &std::path::PathBuf::from(test_path.clone()),
             &mut |file| {
                 actual_result.push(file);
             },
@@ -128,21 +128,21 @@ mod tests {
         assert_eq!(actual_result.len(), 11);
 
         // Check WatchRS ignores all files in ignored_paths
-        let ignore_folder_path = format!("{}\\target\\debug", test_path);
+        let ignore_folder_path = format!("{}\\target\\debug", test_path.clone());
         let mut actual_result = Vec::<DirEntry>::new();
-        let mut ignored_paths = Vec::<&std::path::Path>::new();
-        ignored_paths.push(&std::path::Path::new(&ignore_folder_path));
+        let mut ignore_paths = Vec::<std::path::PathBuf>::new();
+        ignore_paths.push(std::path::PathBuf::from(ignore_folder_path));
 
         visit_dirs(
-            ignored_paths.clone(),
-            std::path::Path::new(&test_path),
+            ignore_paths.clone(),
+            &std::path::PathBuf::from(test_path.clone()),
             &mut |file| {
                 actual_result.push(file);
             },
         )
         .unwrap();
 
-        // Clear files before assertion, in case assertion
+        // Clear files before assertion, in case assertion fails
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
         assert_eq!(actual_result.len(), 10);
@@ -155,7 +155,11 @@ mod tests {
         let (test_path, files) = generate_test_files(String::from("tmp-formatter"), file_count)
             .expect("Couldn't create test files!");
 
-        let mut actual_result = grab_directory_and_files(test_path.clone()).unwrap();
+        let ignore_folder_path = format!("{}\\target\\debug", test_path.clone());
+        let mut ignore_paths = Vec::<std::path::PathBuf>::new();
+        ignore_paths.push(std::path::PathBuf::from(ignore_folder_path));
+
+        let mut actual_result = grab_directory_and_files(test_path.clone(), ignore_paths).unwrap();
 
         let mut expected_result = Vec::<Files>::new();
         for file in 0..file_count {
@@ -163,10 +167,11 @@ mod tests {
                 name: format!("test_{}.txt", file),
                 path: format!("{}\\src\\test_{}.txt", test_path, file),
                 time: files[0].metadata().unwrap().modified().unwrap(),
+                extension: String::from("txt"),
             })
         }
 
-        // Clear files before assertion, in case assertion
+        // Clear files before assertion, in case assertion fails
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
         assert_eq!(actual_result.len(), 10);
@@ -185,6 +190,7 @@ mod tests {
                 name: String::from(format!("test_{}.txt", n)),
                 path: String::from(format!(".\\test_{}.txt", n)),
                 time: SystemTime::now(),
+                extension: String::from("txt"),
             })
         }
 
@@ -194,6 +200,7 @@ mod tests {
             name: String::from(format!("test_{}.txt", files.len() + 1)),
             path: String::from(format!(".\\test_{}.txt", files.len() + 1)),
             time: SystemTime::now(),
+            extension: String::from("txt"),
         });
         let mut expected_result = Vec::<Files>::new();
         if let Some(last_file) = updated_files.last() {
@@ -219,11 +226,17 @@ mod tests {
         let file_count = 10;
         let (test_path, _files) = generate_test_files(String::from("tmp-dir-runner"), file_count)
             .expect("Couldn't create test files!");
+        let ignore_paths = Vec::<std::path::PathBuf>::new();
 
         let thread_path_clone = test_path.clone();
         let worker = std::thread::spawn(move || {
-            let actual_result =
-                utils::dir_watcher(thread_path_clone, Duration::from_millis(1000)).unwrap();
+            let actual_result = utils::dir_watcher(
+                thread_path_clone,
+                ignore_paths,
+                Vec::<String>::new(),
+                Duration::from_millis(1000),
+            )
+            .unwrap();
 
             return actual_result;
         });
@@ -238,10 +251,11 @@ mod tests {
             name: format!("test_{}.txt", file_count + 1),
             path: format!("{}\\test_{}.txt", test_path, file_count + 1),
             time: test_file.metadata().unwrap().modified().unwrap(),
+            extension: String::from("txt"),
         }];
         let actual_result = worker.join().unwrap();
 
-        // Clear files before assertion, in case assertion
+        // Clear files before assertion, in case assertion fails
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
         assert_eq!(actual_result.len(), 1);
@@ -259,7 +273,7 @@ mod tests {
         // Check that an executable name is returned from a valid build directory
         let exe_names = get_executable_from_dir(test_path.clone()).unwrap();
 
-        // Clear files before assertion, in case assertion
+        // Clear files before assertion, in case assertion fails
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
         assert_eq!(exe_names, vec![String::from("test_exe_0.exe")]);
@@ -275,7 +289,7 @@ mod tests {
         // Check that a PID is returned when supplied a valid running process name
         let pid = get_executable_id(vec![String::from("cargo.exe")]).unwrap();
 
-        // Clear files before assertion, in case assertion
+        // Clear files before assertion, in case assertion fails
         cleanup_test_files(test_path).expect("Couldn't clean up files!");
 
         assert_ne!(pid, sysinfo::Pid::from(0));

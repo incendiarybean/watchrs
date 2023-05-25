@@ -5,20 +5,20 @@ use sysinfo::{PidExt, ProcessExt, SystemExt};
 /// A function to scan directories recursively
 ///
 /// # Arguments
-/// * `ignored_paths` - a Vec of Paths to ignore
+/// * `ignore_paths` - a Vec of PathBufs to ignore
 /// * `file` - a Path of the file/folder to check currently
 /// * `cb` - a callback function to run when the scan finds a file
 pub fn visit_dirs(
-    ignored_paths: Vec<&std::path::Path>,
-    file: &std::path::Path,
+    ignore_paths: Vec<std::path::PathBuf>,
+    file: &std::path::PathBuf,
     cb: &mut dyn FnMut(std::fs::DirEntry),
 ) -> std::io::Result<()> {
-    if file.is_dir() && !ignored_paths.contains(&file) {
+    if file.is_dir() && !ignore_paths.contains(&file) {
         for entry in std::fs::read_dir(file)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
-                visit_dirs(ignored_paths.clone(), &path, cb)?;
+                visit_dirs(ignore_paths.clone(), &path, cb)?;
             } else {
                 cb(entry);
             }
@@ -31,17 +31,16 @@ pub fn visit_dirs(
 ///
 /// # Arguments
 /// * `dir_path` - a String representation of a directory path
-pub fn grab_directory_and_files(dir_path: String) -> Result<Vec<Files>, std::io::Error> {
-    let path = std::path::Path::new(&dir_path);
-
-    // TODO: Make this dynamic
-    let mut ignored_paths = Vec::<&std::path::Path>::new();
-    let target_dir = format!("{}/target", dir_path);
-    ignored_paths.push(std::path::Path::new(&target_dir));
+/// * `ignore_paths` - a Vec of PathBufs to ignore
+pub fn grab_directory_and_files(
+    dir_path: String,
+    ignore_paths: Vec<std::path::PathBuf>,
+) -> Result<Vec<Files>, std::io::Error> {
+    let path = std::path::PathBuf::from(dir_path);
 
     // Generate a list of all files in the selected directory
     let mut dir_contents = Vec::<std::fs::DirEntry>::new();
-    visit_dirs(ignored_paths, &path, &mut |file| {
+    visit_dirs(ignore_paths, &path, &mut |file| {
         dir_contents.push(file);
     })?;
 
@@ -56,6 +55,10 @@ pub fn grab_directory_and_files(dir_path: String) -> Result<Vec<Files>, std::io:
                 .expect("Could not get file metadata.")
                 .modified()
                 .expect("Could not get file metadata for time modified."),
+            extension: match item.path().extension() {
+                Some(x) => x.to_string_lossy().to_string(),
+                None => String::from(""),
+            },
         })
         .collect();
 
@@ -90,19 +93,35 @@ pub fn get_list_differences<Item: PartialEq>(
 ///
 /// # Arguments
 /// * `dir_path` - a String representation of a directory path
+/// * `ignore_paths` - a String representation of a directory paths to ignore
+/// * `watch_types` - a String representation of a extensions to watch
 /// * `interval` - a custom duration to check directory on
-pub fn dir_watcher(dir_path: String, interval: Duration) -> Result<Vec<Files>, std::io::Error> {
-    let file_names = grab_directory_and_files(dir_path.clone())
+pub fn dir_watcher(
+    dir_path: String,
+    ignore_paths: Vec<std::path::PathBuf>,
+    watch_types: Vec<String>,
+    interval: Duration,
+) -> Result<Vec<Files>, std::io::Error> {
+    let file_names = grab_directory_and_files(dir_path.clone(), ignore_paths.clone())
         .expect("Could not retrieve files from Directory.");
+
     let changes = loop {
-        let file_names_reloaded = grab_directory_and_files(dir_path.clone())
+        let file_names_reloaded = grab_directory_and_files(dir_path.clone(), ignore_paths.clone())
             .expect("Could not retrieve files from Directory.");
 
         let changes = get_list_differences(file_names_reloaded.clone(), file_names.clone())
             .expect("Couldn't get file differences, check permissions.");
 
         if changes.len() > 0 {
-            break changes;
+            let mut type_changed = false;
+            for change in changes.clone() {
+                if watch_types.contains(&change.extension) {
+                    type_changed = true;
+                }
+            }
+            if type_changed || watch_types.len() == 0 {
+                break changes;
+            }
         }
 
         std::thread::sleep(interval);

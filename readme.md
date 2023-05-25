@@ -26,8 +26,8 @@ Run using (in the desired directory):
 - [ ] Linux Support.
 - [ ] MacOS Support.
 - [ ] Add argument for customisable target directories.
-- [ ] Add argument for ignored directories.
-- [ ] Add argument for target filetype.
+- [x] Add argument for ignored directories.
+- [x] Add argument for target filetype.
 - [ ] Accept object (of unspecified type) to gather arguments/features from (nodemon style).
 - [ ] Run check for duplicate spawning of resources.
 - [ ] Incorporate a better way of monitoring running instances (processes).

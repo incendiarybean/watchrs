@@ -17,6 +17,7 @@ pub struct Files {
     pub name: String,
     pub path: String,
     pub time: SystemTime,
+    pub extension: String,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -34,9 +35,14 @@ pub struct WatchRs {
     pub status: WatcherEvent,
     pub process_id: Option<sysinfo::Pid>,
     pub dir_path: String,
+    pub ignore_paths: Vec<std::path::PathBuf>,
+    pub file_types: Vec<String>,
     pub event: Sender<WatcherEvent>,
 
     watcher: Receiver<WatcherEvent>,
+
+    // Debug
+    reload: bool,
 }
 
 impl Default for WatchRs {
@@ -50,17 +56,93 @@ impl Default for WatchRs {
         Self {
             status: WatcherEvent::Stopped,
             process_id: None,
-            dir_path,
+            dir_path: dir_path.clone(),
+            ignore_paths: vec![format!("{}/target", dir_path).into()],
+            file_types: Vec::<String>::new(),
             event: event_sender,
 
             watcher: event_receiver,
+
+            // Debug
+            reload: true,
         }
     }
 }
 
 impl WatchRs {
+    fn process_args(&mut self) -> &Self {
+        let mut stdout = stdout();
+
+        let mut arg_index = 0;
+        let args: Vec<String> = std::env::args().collect();
+        while arg_index < args.len() {
+            let argument = &args[arg_index];
+            match argument.as_str() {
+                "--no-reload" => {
+                    self.reload = false;
+                }
+                "--ignore" => {
+                    if args[arg_index + 1].contains("--") {
+                        queue!(
+                            stdout,
+                            cursor::MoveToNextLine(1),
+                            SetForegroundColor(Color::Red),
+                            Print("Expected comma delimited list of Paths, recieved Flag: "),
+                            Print(&args[arg_index + 1]),
+                            SetForegroundColor(Color::Reset),
+                        )
+                        .unwrap();
+                        stdout.flush().expect("Could not flush on Stdout");
+                        std::process::exit(0);
+                    }
+
+                    for ignore_path in args[arg_index + 1].split(",") {
+                        self.ignore_paths.push(std::path::PathBuf::from(format!(
+                            "{}/{}",
+                            self.dir_path, ignore_path
+                        )));
+                    }
+
+                    // Move to next index after deducing paths
+                    arg_index = arg_index + 1;
+                }
+                "--extensions" => {
+                    if args[arg_index + 1].contains("--") {
+                        queue!(
+                            stdout,
+                            cursor::MoveToNextLine(1),
+                            SetForegroundColor(Color::Red),
+                            Print("Expected comma delimited list of File Types, recieved Flag: "),
+                            Print(&args[arg_index + 1]),
+                            SetForegroundColor(Color::Reset),
+                        )
+                        .unwrap();
+                        stdout.flush().expect("Could not flush on Stdout");
+                        std::process::exit(0);
+                    }
+
+                    for mut filetype in args[arg_index + 1].split(",") {
+                        if filetype.contains(".") {
+                            filetype = filetype.split(".").collect::<Vec<_>>()[1];
+                        }
+                        self.file_types.push(filetype.to_string());
+                    }
+
+                    // Move to next index after deducing extensions
+                    arg_index = arg_index + 1;
+                }
+                _ => {}
+            }
+            arg_index = arg_index + 1;
+        }
+
+        stdout.flush().expect("Could not flush on Stdout");
+
+        self
+    }
+
     /// Launches an instance of WatchRS
-    pub fn begin_watching(self) -> Result<(), std::io::Error> {
+    pub fn begin_watching(mut self) -> Result<(), std::io::Error> {
         let mut stdout = stdout();
         queue!(
             stdout,
@@ -72,11 +154,17 @@ impl WatchRs {
         )
         .expect("Could not write to stdout.");
 
+        self.process_args();
+
         stdout.flush().expect("Could not flush on Stdout");
 
-        // Start processes
+        // Start watching directories
         self.spawn_directory_watcher();
-        self.spawn_command_runner();
+
+        // Start reload process if allowed
+        if self.reload {
+            self.spawn_command_runner();
+        }
 
         // Handle events
         self.event_handler();
@@ -88,6 +176,8 @@ impl WatchRs {
     /// Watches directory and sends event on changes
     fn spawn_directory_watcher(&self) {
         let path = self.dir_path.clone();
+        let ignore_paths = self.ignore_paths.clone();
+        let watch_types = self.file_types.clone();
         self.event
             .send(WatcherEvent::Starting)
             .expect("Could not send event.");
@@ -96,8 +186,13 @@ impl WatchRs {
         std::thread::Builder::new()
             .name("DirWatcher".to_string())
             .spawn(move || {
-                let file_changes = utils::dir_watcher(path, Duration::from_millis(1000))
-                    .expect("Could not find changes.");
+                let file_changes = utils::dir_watcher(
+                    path,
+                    ignore_paths,
+                    watch_types,
+                    Duration::from_millis(1000),
+                )
+                .expect("Could not find changes.");
                 event
                     .clone()
                     .send(WatcherEvent::FileChanged(file_changes))
