@@ -1,16 +1,12 @@
 pub mod utils;
 
-use crossterm::{
-    cursor, queue,
-    style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal,
-};
+use crossterm::style::Stylize;
 use std::{
-    io::{stdout, Write},
     sync::mpsc::{Receiver, Sender},
     time::{Duration, SystemTime},
 };
 use sysinfo::{ProcessExt, System, SystemExt};
+use utils::logger_utils::logger;
 
 #[derive(PartialEq, PartialOrd, Clone, Debug)]
 pub struct Files {
@@ -42,6 +38,7 @@ pub struct WatchRs {
     watcher: Receiver<WatcherEvent>,
 
     // Debug
+    debug: bool,
     reload: bool,
 }
 
@@ -64,99 +61,32 @@ impl Default for WatchRs {
             watcher: event_receiver,
 
             // Debug
+            debug: false,
             reload: true,
         }
     }
 }
 
 impl WatchRs {
-    fn process_args(&mut self) -> &Self {
-        let mut stdout = stdout();
-
-        let mut arg_index = 0;
-        let args: Vec<String> = std::env::args().collect();
-        while arg_index < args.len() {
-            let argument = &args[arg_index];
-            match argument.as_str() {
-                "--no-reload" => {
-                    self.reload = false;
-                }
-                "--ignore" => {
-                    if args[arg_index + 1].contains("--") {
-                        queue!(
-                            stdout,
-                            cursor::MoveToNextLine(1),
-                            SetForegroundColor(Color::Red),
-                            Print("Expected comma delimited list of Paths, recieved Flag: "),
-                            Print(&args[arg_index + 1]),
-                            SetForegroundColor(Color::Reset),
-                        )
-                        .unwrap();
-                        stdout.flush().expect("Could not flush on Stdout");
-                        std::process::exit(0);
-                    }
-
-                    for ignore_path in args[arg_index + 1].split(",") {
-                        self.ignore_paths.push(std::path::PathBuf::from(format!(
-                            "{}/{}",
-                            self.dir_path, ignore_path
-                        )));
-                    }
-
-                    // Move to next index after deducing paths
-                    arg_index = arg_index + 1;
-                }
-                "--extensions" => {
-                    if args[arg_index + 1].contains("--") {
-                        queue!(
-                            stdout,
-                            cursor::MoveToNextLine(1),
-                            SetForegroundColor(Color::Red),
-                            Print("Expected comma delimited list of File Types, recieved Flag: "),
-                            Print(&args[arg_index + 1]),
-                            SetForegroundColor(Color::Reset),
-                        )
-                        .unwrap();
-                        stdout.flush().expect("Could not flush on Stdout");
-                        std::process::exit(0);
-                    }
-
-                    for mut filetype in args[arg_index + 1].split(",") {
-                        if filetype.contains(".") {
-                            filetype = filetype.split(".").collect::<Vec<_>>()[1];
-                        }
-                        self.file_types.push(filetype.to_string());
-                    }
-
-                    // Move to next index after deducing extensions
-                    arg_index = arg_index + 1;
-                }
-                _ => {}
-            }
-            arg_index = arg_index + 1;
-        }
-
-        stdout.flush().expect("Could not flush on Stdout");
-
-        self
-    }
-
     /// Launches an instance of WatchRS
     pub fn begin_watching(mut self) -> Result<(), std::io::Error> {
-        let mut stdout = stdout();
-        queue!(
-            stdout,
-            terminal::Clear(terminal::ClearType::All),
-            cursor::MoveTo(0, 0),
-            SetForegroundColor(Color::Cyan),
-            Print("Waiting for initialisation!"),
-            cursor::MoveToNextLine(1),
-        )
-        .expect("Could not write to stdout.");
-
+        // Validate passed in arguments
         self.process_args();
 
-        stdout.flush().expect("Could not flush on Stdout");
+        logger::clear();
+        logger::debug(format!(
+            "{}: {},\n{}: {:?}\n{}: {}\n{}: {}\n\n",
+            "dir_path".magenta(),
+            self.dir_path.clone().green(),
+            "ignore_paths".magenta(),
+            self.ignore_paths,
+            "file_types".magenta(),
+            self.file_types.join(", ").green(),
+            "reload".magenta(),
+            self.reload.to_string().green()
+        ));
+
+        logger::info(format!("{}", "Waiting for initialisation!".cyan()));
 
         // Start watching directories
         self.spawn_directory_watcher();
@@ -186,7 +116,7 @@ impl WatchRs {
         std::thread::Builder::new()
             .name("DirWatcher".to_string())
             .spawn(move || {
-                let file_changes = utils::dir_watcher(
+                let file_changes = utils::watcher_utils::dir_watcher(
                     path,
                     ignore_paths,
                     watch_types,
@@ -210,7 +140,8 @@ impl WatchRs {
             .name("CommandRunner".to_string())
             .spawn(move || loop {
                 let (child_process, pid, exe_names) =
-                    utils::cmd_runner(path.clone()).expect("Could not run command successfully.");
+                    utils::watcher_utils::cmd_runner(path.clone())
+                        .expect("Could not run command successfully.");
 
                 event
                     .send(WatcherEvent::Watching(pid, exe_names))
@@ -243,108 +174,50 @@ impl WatchRs {
 
     /// Handles incoming events from watchers & runners
     fn event_handler(mut self) {
-        let mut stdout = stdout();
-
         loop {
             match self.watcher.recv() {
                 Ok(event) => match event {
                     WatcherEvent::Watching(process_id, exe_names) => {
                         self.process_id = Some(process_id);
 
-                        queue!(
-                            stdout,
-                            terminal::Clear(terminal::ClearType::All),
-                            cursor::MoveTo(0, 0)
-                        )
-                        .unwrap();
-
-                        queue!(
-                            stdout,
-                            SetForegroundColor(Color::Cyan),
-                            Print(format!("Process ID:")),
-                            cursor::MoveRight(2),
-                            SetForegroundColor(Color::Green),
-                            Print(process_id),
-                            cursor::MoveToNextLine(1),
-                            SetForegroundColor(Color::Cyan),
-                            Print(format!("Executable:")),
-                            SetForegroundColor(Color::Green),
-                        )
-                        .unwrap();
+                        logger::clear();
+                        logger::info(format!(
+                            "{}: {}\n{}: {}",
+                            "Process ID".cyan(),
+                            process_id.to_string().green(),
+                            "Executable".cyan(),
+                            exe_names.join(", ").green()
+                        ));
 
                         if exe_names.len() > 1 {
-                            for exe in exe_names.clone() {
-                                queue!(stdout, cursor::MoveRight(2), Print(format!("{exe}")))
-                                    .unwrap();
-                            }
-                            queue!(
-                                stdout,
-                                SetForegroundColor(Color::Red),
-                                cursor::MoveToNextLine(1),
-                                Print("WARNING: Expected 1 platform associated executable but found multiple."),
-                                cursor::MoveToNextLine(1),
-                                Print("Has this project been renamed?"),
-                                cursor::MoveToNextLine(1),
-                                Print("If you encounter issues, remove the excess executables in the ./target/debug folder."),
-                                cursor::MoveToNextLine(2)
-                            )
-                            .unwrap();
-                        } else {
-                            queue!(
-                                stdout,
-                                cursor::MoveRight(2),
-                                Print(format!("{}", exe_names[0]))
-                            )
-                            .unwrap();
+                            logger::warning(
+                                format!(
+                                    "{}\n{}\n{}\n", 
+                                    "WARNING: Expected 1 platform associated executable but found multiple.",
+                                    "Has this project been renamed?",
+                                    "If you encounter issues, remove the excess executables in the ./target/debug folder."
+                                )
+                            );
                         }
 
-                        queue!(
-                            stdout,
-                            cursor::MoveToNextLine(1),
-                            SetForegroundColor(Color::Cyan),
-                            Print("Watching directory for changes:"),
-                            cursor::MoveToNextLine(1),
-                            SetForegroundColor(Color::DarkYellow),
-                            cursor::MoveRight(2),
-                            Print(self.dir_path.clone()),
-                            cursor::MoveToNextLine(2),
-                            SetForegroundColor(Color::Cyan),
-                            Print("Application is ready to reload."),
-                            ResetColor
-                        )
-                        .expect("Could not write to stdout.");
+                        logger::info(format!(
+                            "{}:\n  {}\n\n{}",
+                            "Watching directory for changes".cyan(),
+                            self.dir_path.clone().dark_yellow(),
+                            "Application is ready to reload.".cyan()
+                        ));
                     }
                     WatcherEvent::FileChanged(files) => {
-                        queue!(
-                            stdout,
-                            terminal::Clear(terminal::ClearType::All),
-                            cursor::MoveTo(0, 0),
-                            SetForegroundColor(Color::Cyan),
-                            Print("File(s) were changed:"),
-                            SetForegroundColor(Color::DarkYellow),
-                            cursor::MoveToNextLine(1),
-                        )
-                        .expect("Could not write to stdout.");
+                        let file_list: Vec<String> =
+                            files.iter().map(|file| file.name.clone()).collect();
 
-                        for file in files {
-                            queue!(
-                                stdout,
-                                cursor::MoveRight(2),
-                                Print(file.name.clone()),
-                                cursor::MoveToNextLine(1),
-                            )
-                            .expect("Could not write to stdout.");
-                        }
-
-                        queue!(
-                            stdout,
-                            cursor::MoveToNextLine(1),
-                            SetForegroundColor(Color::Cyan),
-                            terminal::Clear(terminal::ClearType::CurrentLine),
-                            Print("Reloading application..."),
-                            cursor::MoveToNextLine(1),
-                        )
-                        .expect("Could not write to stdout.");
+                        logger::clear();
+                        logger::info(format!(
+                            "{}:\n   {}\n\n{}",
+                            "File(s) were changed:".cyan(),
+                            file_list.join("\n    ").yellow(),
+                            "Reloading application...".cyan()
+                        ));
 
                         // Find and kill the process
                         if let Some(process_id) = self.process_id {
@@ -359,26 +232,81 @@ impl WatchRs {
                         self.spawn_directory_watcher();
                     }
                     WatcherEvent::Error(err) => {
-                        queue!(stdout, SetForegroundColor(Color::Red), Print(err))
-                            .expect("Could not write to stdout.");
+                        logger::error(err);
+                        std::process::exit(1);
                     }
                     WatcherEvent::Exit => {
-                        queue!(
-                            stdout,
-                            terminal::Clear(terminal::ClearType::All),
-                            cursor::MoveTo(0, 0),
-                            SetForegroundColor(Color::Cyan),
-                            Print("Exiting program!"),
-                            ResetColor
-                        )
-                        .expect("Could not write to stdout.");
+                        logger::clear();
+                        logger::info(format!("{}", "Exiting program!".cyan()));
                         break;
                     }
                     _ => (),
                 },
                 Err(_) => (),
             }
-            stdout.flush().expect("Could not flush on stdout.");
         }
+    }
+
+    fn process_args(&mut self) -> &Self {
+        let mut argument_index = 0;
+        let arguments: Vec<String> = std::env::args().collect();
+        let arguments_requiring_list = vec![String::from("--ignore"), String::from("--extensions")];
+
+        while argument_index < arguments.len() {
+            let argument = &arguments[argument_index];
+            let end_of_arguments = argument_index + 1 >= arguments.len();
+            let next_argument = if !end_of_arguments {
+                arguments[argument_index + 1].clone()
+            } else {
+                String::new()
+            };
+            let next_argument_is_flag = next_argument.contains("--");
+            let argument_requires_input = arguments_requiring_list.contains(argument);
+
+            // Check if argument has required input
+            if argument_requires_input && (next_argument_is_flag || next_argument.is_empty()) {
+                logger::error(format!(
+                    "Expected comma delimited list for flag: {}",
+                    argument,
+                ));
+                std::process::exit(1);
+            }
+
+            match argument.as_str() {
+                "--no-reload" => {
+                    self.reload = false;
+                }
+                "--debug" => {
+                    self.debug = true;
+                }
+                "--ignore" => {
+                    for path in next_argument.split(",") {
+                        self.ignore_paths.push(std::path::PathBuf::from(format!(
+                            "{}/{}",
+                            self.dir_path, path
+                        )));
+                    }
+                }
+                "--extensions" => {
+                    for mut extension in next_argument.split(",") {
+                        if extension.contains(".") {
+                            extension = extension.split(".").collect::<Vec<_>>()[1];
+                        }
+                        self.file_types.push(extension.to_string());
+                    }
+                }
+                _ => {
+                    // Ignore the passed executable argument
+                    if !argument.contains("watchrs") {
+                        logger::error(format!("Unexpected commandline argument: {}", argument));
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            // Move to next index after matching flag
+            argument_index = argument_index + if !argument_requires_input { 1 } else { 2 };
+        }
+        self
     }
 }

@@ -5,8 +5,9 @@ mod tests {
         time::{Duration, SystemTime},
     };
     use watchrs::{
-        utils::{
-            self, get_executable_from_dir, get_executable_id, grab_directory_and_files, visit_dirs,
+        utils::watcher_utils::{
+            dir_watcher, get_executable_from_dir, get_executable_id, get_list_differences,
+            grab_directory_and_files, visit_dirs,
         },
         Files, WatchRs, WatcherEvent,
     };
@@ -206,7 +207,7 @@ mod tests {
         if let Some(last_file) = updated_files.last() {
             expected_result.push(last_file.clone());
         }
-        let actual_result = utils::get_list_differences(updated_files, files.clone()).unwrap();
+        let actual_result = get_list_differences(updated_files, files.clone()).unwrap();
 
         assert_eq!(actual_result, expected_result);
 
@@ -215,7 +216,7 @@ mod tests {
         file_date_changed.time = SystemTime::now();
         let updated_files = vec![files[0].clone(), file_date_changed];
         let expected_result = vec![updated_files[1].clone()];
-        let actual_result = utils::get_list_differences(updated_files, files.clone()).unwrap();
+        let actual_result = get_list_differences(updated_files, files.clone()).unwrap();
 
         assert_eq!(actual_result, expected_result);
     }
@@ -230,7 +231,7 @@ mod tests {
 
         let thread_path_clone = test_path.clone();
         let worker = std::thread::spawn(move || {
-            let actual_result = utils::dir_watcher(
+            let actual_result = dir_watcher(
                 thread_path_clone,
                 ignore_paths,
                 Vec::<String>::new(),
