@@ -1,6 +1,17 @@
+use serde::Deserialize;
+
 use crate::{utils, Files, WatcherEvent};
 use std::time::Duration;
-use sysinfo::{ProcessExt, SystemExt};
+
+#[derive(Deserialize)]
+struct CargoPackage {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CargoTOML {
+    package: CargoPackage,
+}
 
 /// A constant directory scanning service
 ///
@@ -55,57 +66,58 @@ pub fn cmd_runner(
     _dir_cmd: String,
     dir_path: String,
 ) -> Result<(), std::io::Error> {
-    if cfg!(target_os = "windows") {
-        loop {
-            // Generate Cargo Run process
-            let child_process = std::process::Command::new("cargo").args(["run"]).spawn()?;
+    loop {
+        // Generate Cargo Run process
+        let child_process = std::process::Command::new("cargo").args(["run"]).spawn()?;
 
-            // scan and find executable
-            let mut exe_name = String::new();
-            for entry in std::fs::read_dir(dir_path.clone() + "/target/debug")
-                .expect("Couldn't search directory for executables")
-            {
-                if let Some(found_file) = entry.unwrap().file_name().to_str() {
-                    if found_file.contains(".exe") {
-                        exe_name = found_file.to_string();
+        match std::fs::read_to_string(dir_path.clone() + "/Cargo.toml") {
+            Ok(cargo_file) => {
+                let config: CargoTOML = toml::from_str(&cargo_file).unwrap();
+                let mut sys = sysinfo::System::new();
+
+                loop {
+                    std::thread::sleep(Duration::from_millis(100));
+                    let processes: Vec<(&sysinfo::Pid, &sysinfo::Process)> = sys
+                        .processes()
+                        .iter()
+                        .filter(|(_pid, process)| {
+                            *config.package.name == *process.name().to_owned()
+                        })
+                        .collect();
+
+                    if processes.len() == 1 {
+                        dir_event
+                            .send(WatcherEvent::Watching(child_process.id()))
+                            .unwrap();
+                        break;
                     }
+
+                    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
                 }
             }
+            Err(e) => panic!("TOML File is invalid! {}", e),
+        }
 
-            let mut sys = sysinfo::System::new();
-            let mut exec_running = false;
-            loop {
-                for (pid, process) in sys.processes() {
-                    if exe_name == process.name().to_owned() {
-                        let pid = pid.to_owned();
-                        dir_event.send(WatcherEvent::Watching(pid)).unwrap();
-                        exec_running = true;
+        match child_process.wait_with_output() {
+            Ok(output) => {
+                if let Some(status_code) = output.status.code() {
+                    if status_code == 0 {
+                        // Application was closed
+                        dir_event.send(WatcherEvent::Exit).unwrap();
+                        break;
+                    } else {
+                        // Application was terminated
+                        dir_event.send(WatcherEvent::Starting).unwrap();
                         break;
                     }
                 }
-
-                if exec_running {
-                    break;
-                }
-
-                sys.refresh_processes();
             }
-
-            match child_process.wait_with_output() {
-                Ok(output) => {
-                    if let Some(status_code) = output.status.code() {
-                        if status_code == 0 {
-                            // Application was closed
-                            dir_event.send(WatcherEvent::Exit).unwrap();
-                        } else {
-                            // Application was terminated
-                            dir_event.send(WatcherEvent::Starting).unwrap();
-                        }
-                    }
-                }
-                Err(e) => dir_event.send(WatcherEvent::Error(e.to_string())).unwrap(),
+            Err(e) => {
+                dir_event.send(WatcherEvent::Error(e.to_string())).unwrap();
+                break;
             }
         }
     }
+
     Ok(())
 }
