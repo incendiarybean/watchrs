@@ -11,7 +11,7 @@ use std::{
     sync::{mpsc::Sender, Arc, Mutex},
     time::{Duration, SystemTime},
 };
-use sysinfo::System;
+use sysinfo::{Pid, System};
 
 #[derive(PartialEq, PartialOrd, Debug, Clone)]
 pub struct Files {
@@ -23,7 +23,7 @@ pub struct Files {
 #[derive(Clone, Debug, PartialEq)]
 pub enum WatcherEvent {
     Starting,
-    Watching(u32),
+    Watching(Pid),
     FileChanged(Vec<Files>),
     Stopping,
     Stopped,
@@ -69,7 +69,7 @@ impl Default for WatchDog {
         let watch_dog_status = Arc::new(Mutex::new(WatcherEvent::Stopped));
         let watch_dog_status_clone = Arc::clone(&watch_dog_status);
 
-        let cargo_exe_pid = Arc::new(Mutex::new(usize::default()));
+        let cargo_exe_pid = Arc::new(Mutex::new(Pid::from(usize::default())));
 
         std::thread::spawn(move || loop {
             // Sleep loop to loosen CPU stress
@@ -91,7 +91,7 @@ impl Default for WatchDog {
                     }
                     WatcherEvent::Watching(process_id) => {
                         let mut pname = cargo_exe_pid.lock().unwrap();
-                        *pname = process_id.clone() as usize;
+                        *pname = process_id.clone();
 
                         queue!(
                             stdout,
