@@ -85,7 +85,7 @@ pub fn cmd_runner(
                         })
                         .collect();
 
-                    if processes.len() == 1 {
+                    if processes.len() > 0 {
                         dir_event
                             .send(WatcherEvent::Watching(processes[0].0.clone()))
                             .unwrap();
